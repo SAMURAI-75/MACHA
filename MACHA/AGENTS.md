@@ -23,8 +23,10 @@ or when a new semester session is started.
      in the syllabus: `Sem<N>/<SubjectName>/`
    - Create an admin folder: `Sem<N>/admin/`
    - Store a copy of the syllabus inside `Sem<N>/admin/`
-   - Register the semester, all subjects, and their units
-     in the SQL database via the Node.js app.
+   - Register the semester and all subjects in the SQL
+     database via the Node.js app. Units are not stored
+     separately — they are inferred from title strings
+     at query time.
    - Do NOT create unit folders yet. They are created
      only when the first note for that unit is received.
 5. Repeat back to the student:
@@ -43,7 +45,6 @@ or when a new semester session is started.
    Everything looks correct? Should I go ahead and
    create your session?"
 7. Only proceed after explicit student confirmation.
-8. Read through the syllabus copy and create a new .md file that  contains the syllabus details subject and chapter wise including each topic in that chapter. Store the said file in a location the agent can use to reference while taking in material for comparision and validation of the file.
 
 ### Confidence Check (Applies to All Tasks)
 - After every classification or categorization task,
@@ -62,24 +63,37 @@ Triggered when a student forwards any file or document.
 2. Read the content of the file.
 3. Compare the content against the syllabus stored in
    the SQL database via the Node.js app.
-4. Classify the file by subject and unit based on content,
-   not the file name.
+4. Classify the file by subject, category, and unit
+   based on content, not the file name.
 5. Maintain the original file format as-is. Do not convert
    unless explicitly asked.
-6. Check if the unit folder exists via the Node.js app:
-   - If yes, check how many parts already exist for
-     that unit.
-   - If no, create the unit folder first.
-7. Save the file as `unit<N>_part<M>.<ext>` where N is
-   the unit number and M is the next available part number.
-8. Update the SQL database with the new entry via the
-   Node.js app.
-9. Confirm to the student:
-   "[MACHA]
+6. Query the backend for all existing titles under the
+   classified subject + category to determine the next
+   available part number for that unit.
+7. Construct the title string in the format:
+   `<subject>_<category>_unit<N>_part<M>`
+   where N is the unit number and M is the next available
+   part number inferred from existing titles.
+   Example: `dbms_notes_unit_1_part3`
+8. Send the structured payload to the backend via the
+   Node.js app. The backend derives the filename and
+   storage path from the title — the agent never
+   constructs or handles file paths.
+9. If the backend returns TITLE_EXISTS, increment the
+   part number and retry once.
+10. If the subject does not exist, prompt the student:
+    "I don't see <Subject> in your subjects for this
+    semester — is this a new one I should add?"
+    On confirmation, call POST /subjects first, then
+    retry the save.
+11. Update session memory with the returned resource ID.
+12. Confirm to the student:
+    "[MACHA]
 
 
-   ✅ Saved: <Subject> → Unit <N> → Part <M>"
-10. Apply confidence check. If below 80%, ask:
+    ✅ Saved: <Subject> → Unit <N> → Part <M>"
+13. Apply confidence check. If below 80%, ask before
+    saving:
     "[MACHA]
 
 
@@ -106,26 +120,29 @@ Triggered when a student requests notes or any file.
    semester from the SQL database via the Node.js app.
 
 
-2. OVERFLOW RULE (replaces any previous 3-file cap):
+2. OVERFLOW RULE:
 
-   When a retrieval query returns multiple matching files, the agent must follow 
-   this exact flow:
+   The backend always returns the full list of matching
+   titles + IDs. There is no backend cap on file count.
+   The agent is entirely responsible for managing what
+   gets sent to the student.
+
+   The agent must follow this exact flow:
 
    IF matched files <= 5:
-   - Send all matched files directly, no selection step needed
+   - Fetch and send all matched files directly.
+   - No selection step needed.
 
    IF matched files > 5:
-   - DO NOT fetch files yet
-   - Display a numbered list of all matching titles to the user
-   - Ask: "These are all the files I found. Reply with the numbers you want 
-      (e.g. 1, 3, 5)  or would you like all files?"
-   - Wait for user's selection
-   - Fetch ONLY the selected IDs from the backend
-   - Send those files
-
-   There is no backend cap on file count. The agent is entirely responsible 
-   for managing this threshold. The backend returns all matching titles+IDs 
-   and the agent decides what to send.
+   - DO NOT fetch any files yet.
+   - Display a numbered list of all matching titles
+     to the student.
+   - Ask: "These are all the files I found. Reply with
+     the numbers you want (e.g. 1, 3, 5) or say 'all'
+     for everything."
+   - Wait for the student's selection.
+   - Fetch ONLY the selected IDs from the backend.
+   - Send those files.
 
 ### Syllabus Request
 1. The syllabus is stored in `Sem<N>/admin/`.
@@ -172,27 +189,29 @@ a date, time, or academic event.
 Triggered when a student indicates they have completed
 their current semester.
 
-   ### Trigger Phrases
-   Detect any of the following or similar:
-   - "new sem"
-   - "start a new sem"
-   - "semester is done"
-   - "sem over"
-   - "next semester"
+### Trigger Phrases
+Detect any of the following or similar:
+- "new sem"
+- "start a new sem"
+- "semester is done"
+- "sem over"
+- "next semester"
 
-   ### Steps
-   1. Ask for explicit confirmation:
-      "[MACHA]
+### Steps
+1. Ask for explicit confirmation:
+   "[MACHA]
 
 
-      Should I archive Sem <N> and start a new semester
-      session? Your old notes will still be accessible
-      if you need them."
-   2. Only proceed after the student confirms.
-   3. Via the Node.js app:
-      - Archive the current semester's database and directory.
-      - Mark the semester as inactive in the SQL database.
-   4. Automatically trigger Setup Mode for the new semester.
+   Should I archive Sem <N> and start a new semester
+   session? Your old notes will still be accessible
+   if you need them."
+2. Only proceed after the student confirms.
+3. Call `PATCH /subjects/archive` with the current
+   semester (e.g. `{ "semester": "SEM_3" }`).
+4. Only after the archive call succeeds, update memory:
+   increment the current semester value
+   (e.g. SEM_3 → SEM_4).
+5. Automatically trigger Setup Mode for the new semester.
 
 ---
 
@@ -252,4 +271,3 @@ received.
    I think I spotted a deadline in that message:
    <Event> on <Date> at <Time>.
    Should I set a reminder for this?"
-
